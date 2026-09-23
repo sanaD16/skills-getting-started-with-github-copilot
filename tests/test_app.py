@@ -1,28 +1,131 @@
+from copy import deepcopy
+
+import pytest
 from fastapi.testclient import TestClient
 
-from src.app import app
+from src.app import activities, app
 
 client = TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def reset_activities():
+    original_activities = deepcopy(activities)
+    yield
+    activities.clear()
+    activities.update(original_activities)
+
+
+def test_root_redirects_to_static_index():
+    # Arrange
+    expected_location = "/static/index.html"
+
+    # Act
+    response = client.get("/", follow_redirects=False)
+
+    # Assert
+    assert response.status_code == 307
+    assert response.headers["location"] == expected_location
+
+
+def test_get_activities_returns_all_activities():
+    # Arrange
+    expected_activity = "Chess Club"
+
+    # Act
+    response = client.get("/activities")
+
+    # Assert
+    assert response.status_code == 200
+    assert expected_activity in response.json()
+
+
 def test_signup_updates_activity_participants_immediately():
+    # Arrange
+    activity_name = "Basketball Team"
     email = "newstudent@mergington.edu"
 
-    response = client.post("/activities/Basketball Team/signup?email=" + email)
+    # Act
+    response = client.post(f"/activities/{activity_name}/signup", params={"email": email})
 
+    # Assert
     assert response.status_code == 200
-    assert email in client.get("/activities").json()["Basketball Team"]["participants"]
+    assert response.json()["message"] == f"Signed up {email} for {activity_name}"
+    assert email in activities[activity_name]["participants"]
 
-    # Clean up for idempotent reruns
-    client.delete("/activities/Basketball Team/unregister?email=" + email)
+
+def test_signup_rejects_duplicate_participant():
+    # Arrange
+    activity_name = "Chess Club"
+    email = "michael@mergington.edu"
+
+    # Act
+    response = client.post(f"/activities/{activity_name}/signup", params={"email": email})
+
+    # Assert
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Student already signed up for this activity"
+
+
+def test_signup_rejects_unknown_activity():
+    # Arrange
+    activity_name = "Unknown Club"
+    email = "newstudent@mergington.edu"
+
+    # Act
+    response = client.post(f"/activities/{activity_name}/signup", params={"email": email})
+
+    # Assert
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Activity not found"
+
+
+def test_signup_requires_email():
+    # Arrange
+    activity_name = "Basketball Team"
+
+    # Act
+    response = client.post(f"/activities/{activity_name}/signup")
+
+    # Assert
+    assert response.status_code == 422
 
 
 def test_unregister_participant():
-    response = client.delete("/activities/Chess Club/unregister?email=michael@mergington.edu")
+    # Arrange
+    activity_name = "Chess Club"
+    email = "michael@mergington.edu"
 
+    # Act
+    response = client.delete(f"/activities/{activity_name}/unregister", params={"email": email})
+
+    # Assert
     assert response.status_code == 200
-    assert "michael@mergington.edu" in response.json()["message"]
-    assert "michael@mergington.edu" not in client.get("/activities").json()["Chess Club"]["participants"]
+    assert response.json()["message"] == f"Unregistered {email} from {activity_name}"
+    assert email not in activities[activity_name]["participants"]
 
-    # Clean up for idempotent test reruns
-    client.post("/activities/Chess Club/signup?email=michael@mergington.edu")
+
+def test_unregister_rejects_unknown_participant():
+    # Arrange
+    activity_name = "Chess Club"
+    email = "newstudent@mergington.edu"
+
+    # Act
+    response = client.delete(f"/activities/{activity_name}/unregister", params={"email": email})
+
+    # Assert
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Student is not signed up for this activity"
+
+
+def test_unregister_rejects_unknown_activity():
+    # Arrange
+    activity_name = "Unknown Club"
+    email = "newstudent@mergington.edu"
+
+    # Act
+    response = client.delete(f"/activities/{activity_name}/unregister", params={"email": email})
+
+    # Assert
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Activity not found"
